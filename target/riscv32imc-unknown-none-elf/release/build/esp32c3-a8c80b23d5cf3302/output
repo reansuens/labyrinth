@@ -1,0 +1,3 @@
+cargo:rustc-link-search=/home/reans/Downloads/4UNI/Control_Project/snake/target/riscv32imc-unknown-none-elf/release/build/esp32c3-a8c80b23d5cf3302/out
+cargo:rerun-if-changed=device.x
+cargo:rerun-if-changed=build.rs

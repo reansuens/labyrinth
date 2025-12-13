@@ -1,0 +1,3 @@
+cargo:rustc-link-arg=--error-handling-script=/home/reans/Downloads/4UNI/Control_Project/snake/target/release/build/snake-5ca85c0d57382850/build-script-build
+cargo:rustc-link-arg=-Tdefmt.x
+cargo:rustc-link-arg=-Tlinkall.x

@@ -1,0 +1,4 @@
+cargo:rustc-link-search=/home/reans/Downloads/4UNI/Control_Project/snake/target/riscv32imc-unknown-none-elf/debug/build/defmt-b020b233f2f08918/out
+cargo:rustc-cfg=no_cas
+cargo:rustc-check-cfg=cfg(c_variadic)
+cargo:rustc-check-cfg=cfg(no_cas)
