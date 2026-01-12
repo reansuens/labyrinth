@@ -4,12 +4,14 @@
     clippy::mem_forget,
     reason = "mem::forget is unsafe with esp_hal types holding buffers."
 )]
+
 use defmt::info;
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use esp_hal::{
     delay::Delay,
     gpio::{Input, InputConfig, Level, Output, OutputConfig},
+    timer::*, //use to make duty cycles. and PWM 
 };
 use esp_println as _;
 
@@ -21,6 +23,40 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 }
 
 esp_bootloader_esp_idf::esp_app_desc!();
+
+fn forward(wheelr1: &mut Output, wheelr2: &mut Output, wheell1: &mut Output, wheell2: &mut Output) {
+    wheelr1.set_high();
+    wheelr2.set_low();
+    wheell1.set_high();
+    wheell2.set_low();
+}
+
+fn backward(
+    wheelr1: &mut Output,
+    wheelr2: &mut Output,
+    wheell1: &mut Output,
+    wheell2: &mut Output,
+) {
+    wheelr1.set_low();
+    wheelr2.set_high();
+    wheell1.set_low();
+    wheell2.set_high();
+}
+
+fn right(wheelr1: &mut Output, wheelr2: &mut Output, wheell1: &mut Output, wheell2: &mut Output) {
+    wheell1.set_high();
+    wheell2.set_low();
+    let mut delay = Delay::new();
+    loop {
+        wheelr1.set_low();
+        wheelr2.set_low();
+        delay.delay_millis(800);
+        wheelr1.set_high();
+        wheelr2.set_low();
+        delay.delay_millis(600);
+        break;
+    }
+}
 
 #[main]
 fn main() -> ! {
@@ -34,49 +70,28 @@ fn main() -> ! {
 
     let mut gpio9 = Output::new(peripherals.GPIO9, Level::High, outconfig);
     let mut gpio10 = Output::new(peripherals.GPIO10, Level::Low, outconfig);
+
     let mut gpio2 = Output::new(peripherals.GPIO2, Level::High, outconfig);
     let mut gpio3 = Output::new(peripherals.GPIO3, Level::Low, outconfig);
 
-    let gpio7 = Input::new(peripherals.GPIO7, inconfig);
-    let gpio8 = Input::new(peripherals.GPIO8, inconfig);
+    let _gpio7 = Input::new(peripherals.GPIO7, inconfig);
+    let _gpio8 = Input::new(peripherals.GPIO8, inconfig);
 
     let mut delay = Delay::new();
 
     info!("MOTOR_CONTROL_ACTIVE");
-    info!("ENCODER_MONITORING_ACTIVE");
-    info!("COMMENCING_OPERATIONAL_LOOP");
-
-    let mut cycle_counter = 0u32;
-    let mut direction_forward = true;
 
     loop {
-        let gpio7_state = if gpio7.is_high() { 1 } else { 0 };
-        let gpio8_state = if gpio8.is_high() { 1 } else { 0 };
+        info!("turning right");
+        right(&mut gpio9, &mut gpio10, &mut gpio2, &mut gpio3);
+        delay.delay_millis(500);
 
-        info!("GPIO7: {} | GPIO8: {}", gpio7_state, gpio8_state);
+        info!("moving forward");
+        forward(&mut gpio9, &mut gpio10, &mut gpio2, &mut gpio3);
+        delay.delay_millis(7000);
 
-        cycle_counter += 1;
-        if cycle_counter >= 50 {
-            cycle_counter = 0;
-            direction_forward = !direction_forward;
-
-            if direction_forward {
-                gpio9.set_high();
-                gpio10.set_low();
-                gpio2.set_high();
-                gpio3.set_low();
-                info!("WHEEL_1: FORWARD");
-                info!("WHEEL_2: FORWARD");
-            } else {
-                gpio9.set_low();
-                gpio10.set_high();
-                gpio2.set_low();
-                gpio3.set_high();
-                info!("WHEEL_1: REVERSE");
-                info!("WHEEL_2: REVERSE");
-            }
-        }
-
-        delay.delay_millis(100);
+        info!("moving BACKward");
+        backward(&mut gpio9, &mut gpio10, &mut gpio2, &mut gpio3);
+        delay.delay_millis(8000);
     }
 }
