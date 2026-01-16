@@ -86,14 +86,17 @@ impl<'a> MotorController<'a> {
 
     fn set_motor(&mut self, motor: MotorSelect, speed: u8, direction: Direction) {
         let speed = speed.min(100);
-        let duty = (speed as u32 * self.max_duty) / 100;
+        let duty: u32 = (speed as u32 * self.max_duty) / 100;
 
         match motor {
             MotorSelect::Right => {
                 match direction {
                     Direction::Forward => self.r_dir.set_high(),
                     Direction::Backward => self.r_dir.set_low(),
-                    _ => self.pwm_right.set_duty(0),
+                    _ => {
+                        self.pwm_right.set_duty(0);
+                        return;
+                    }
                 }
                 self.pwm_right.set_duty(duty as u8);
             }
@@ -102,7 +105,10 @@ impl<'a> MotorController<'a> {
                 match direction {
                     Direction::Forward => self.l_dir.set_high(),
                     Direction::Backward => self.l_dir.set_low(),
-                    _ => self.pwm_left.set_duty(0),
+                    _ => {
+                        self.pwm_right.set_duty(0);
+                        return;
+                    }
                 }
                 self.pwm_left.set_duty(duty as u8);
             }
@@ -226,23 +232,23 @@ fn main() -> ! {
 
     // MAIN CONTROL SEQUENCE
     loop {
-        // FORWARD VECTOR EXECUTION
-        motor_controller.set_motor(MotorSelect::Right, 80, Direction::Forward);
-        motor_controller.set_motor(MotorSelect::Left, 80, Direction::Forward);
+        // FORWARD VECTOR: BOTH MOTORS
+        motor.set_motor(MotorSelect::Right, 80, Direction::Forward);
+        motor.set_motor(MotorSelect::Left, 80, Direction::Forward);
         delay.delay_millis(2000);
 
-        // REVERSE VECTOR EXECUTION
-        motor_controller.set_motor(MotorSelect::Right, 60, Direction::Backward);
-        motor_controller.set_motor(MotorSelect::Left, 60, Direction::Backward);
+        // REVERSE VECTOR: BOTH MOTORS
+        motor.set_motor(MotorSelect::Right, 60, Direction::Backward);
+        motor.set_motor(MotorSelect::Left, 60, Direction::Backward);
         delay.delay_millis(2000);
 
-        // BRAKE APPLICATION
-        motor_controller.set_motor(MotorSelect::Right, 0, Direction::Brake);
-        motor_controller.set_motor(MotorSelect::Left, 0, Direction::Brake);
+        // BRAKE VECTOR: ELECTRICAL HOLD
+        motor.set_motor(MotorSelect::Right, 0, Direction::Brake);
+        motor.set_motor(MotorSelect::Left, 0, Direction::Brake);
         delay.delay_millis(1000);
 
-        // COAST MODE (ZERO TORQUE)
-        motor_controller.stop();
+        // COAST VECTOR: ZERO TORQUE, FREE ROTATION
+        motor.stop();
         delay.delay_millis(1000);
     }
 }
