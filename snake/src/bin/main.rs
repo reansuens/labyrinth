@@ -106,7 +106,7 @@ impl<'a> MotorController<'a> {
                     Direction::Forward => self.l_dir.set_high(),
                     Direction::Backward => self.l_dir.set_low(),
                     _ => {
-                        self.pwm_right.set_duty(0);
+                        self.pwm_left.set_duty(0);
                         return;
                     }
                 }
@@ -184,6 +184,7 @@ fn main() -> ! {
     // H-BRIDGE DIRECTION CONTROL PINS (STATIC OUTPUT)
     let r_dir = Output::new(peripherals.GPIO9, Level::Low, outconfig); // DIR
     let r_pwm = peripherals.GPIO10; // PWM
+
     let l_dir = Output::new(peripherals.GPIO2, Level::Low, outconfig); // DIR
     let l_pwm = peripherals.GPIO3; // PWM
 
@@ -192,15 +193,14 @@ fn main() -> ! {
 
     let mut lstimer0 = ledc.timer::<LowSpeed>(timer::Number::Timer0);
     lstimer0.configure(timer::config::Config {
-        duty: timer::config::Duty::Duty5Bit,
+        duty: timer::config::Duty::Duty10Bit,
         clock_source: timer::LSClockSource::APBClk,
-        frequency: Rate::from_khz(15),
+        frequency: Rate::from_khz(20),
     });
-
     let mut channel0 = ledc.channel(channel::Number::Channel0, r_pwm);
     channel0.configure(channel::config::Config {
         timer: &lstimer0,
-        duty_pct: 10,
+        duty_pct: 15,
         drive_mode: DriveMode::PushPull,
     });
 
@@ -210,20 +210,17 @@ fn main() -> ! {
     lstimer1.configure(timer::config::Config {
         duty: timer::config::Duty::Duty5Bit,
         clock_source: timer::LSClockSource::APBClk,
-        frequency: Rate::from_khz(15),
+        frequency: Rate::from_khz(20),
     });
-
     let mut channel1 = ledc.channel(channel::Number::Channel1, l_pwm);
-    channel0.configure(channel::config::Config {
+    channel1.configure(channel::config::Config {
         timer: &lstimer0,
-        duty_pct: 10,
+        duty_pct: 15,
         drive_mode: DriveMode::PushPull,
     });
-    // INPUT SENSOR ACQUISITION
     let _gpio7 = Input::new(peripherals.GPIO7, inconfig);
     let _gpio8 = Input::new(peripherals.GPIO8, inconfig);
 
-    // MOTOR CONTROLLER INSTANTIATION (CORRECTED OWNERSHIP)
     let motor_cfg = MotorConfig::default();
 
     let mut motor = MotorController::new(r_dir, l_dir, channel0, channel1, &motor_cfg);
@@ -231,24 +228,23 @@ fn main() -> ! {
 
     info!("MOTOR_CONTROLLER_INITIALIZED: ENTERING_MAIN_CONTROL_LOOP");
 
-    // MAIN CONTROL SEQUENCE
     loop {
-        // FORWARD VECTOR: BOTH MOTORS
+        info!("forward");
         motor.set_motor(MotorSelect::Right, 80, Direction::Forward);
         motor.set_motor(MotorSelect::Left, 80, Direction::Forward);
-        delay.delay_millis(2000);
+        delay.delay_millis(5000);
 
-        // REVERSE VECTOR: BOTH MOTORS
-        motor.set_motor(MotorSelect::Right, 60, Direction::Backward);
-        motor.set_motor(MotorSelect::Left, 60, Direction::Backward);
-        delay.delay_millis(2000);
+        info!("Backward");
+        motor.set_motor(MotorSelect::Right, 90, Direction::Backward);
+        motor.set_motor(MotorSelect::Left, 90, Direction::Backward);
+        delay.delay_millis(5000);
 
-        // BRAKE VECTOR: ELECTRICAL HOLD
+        info!("Brake");
         motor.set_motor(MotorSelect::Right, 0, Direction::Brake);
         motor.set_motor(MotorSelect::Left, 0, Direction::Brake);
         delay.delay_millis(1000);
 
-        // COAST VECTOR: ZERO TORQUE, FREE ROTATION
+        info!("force stop = coast");
         motor.stop();
         delay.delay_millis(1000);
     }
