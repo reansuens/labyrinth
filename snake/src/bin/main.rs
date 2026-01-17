@@ -11,13 +11,12 @@ use esp_hal::{
     delay::Delay,
     gpio::{DriveMode, Input, InputConfig, Level, Output, OutputConfig, Pin},
     ledc::{
-        channel::{self, ChannelIFace, Error},
+        channel::{self, ChannelIFace},
         timer::{self, TimerIFace},
         LSGlobalClkSource, Ledc, LowSpeed,
     },
     main,
     time::Rate,
-    timer::PeriodicTimer,
 };
 use esp_println as _;
 
@@ -25,11 +24,20 @@ use esp_println as _;
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {
         info!("FAULT: UNRECOVERABLE_EXCEPTION_DETECTED");
+        let delay = Delay::new();
+        delay.delay_millis(1500);
     }
 }
 
 #[derive(Clone, Copy)]
-enum Motion {
+enum MotorDirection {
+    Clockwise,
+    CounterClockwise,
+    Brake,
+}
+
+#[derive(Clone, Copy)]
+enum VehicleMotion {
     Forward,
     Backward,
     Right,
@@ -40,83 +48,103 @@ enum Motion {
 }
 
 struct MotorController<'a> {
-    r_dir: Output<'a>,
-    l_dir: Output<'a>,
-    pwm_right: channel::Channel<'a, LowSpeed>,
-    pwm_left: channel::Channel<'a, LowSpeed>,
+    dir: Output<'a>,
+    pwm: channel::Channel<'a, LowSpeed>,
 }
 
 impl<'a> MotorController<'a> {
-    fn new(
-        r_dir: Output<'a>,
-        l_dir: Output<'a>,
-        pwm_right: channel::Channel<'a, LowSpeed>,
-        pwm_left: channel::Channel<'a, LowSpeed>,
-    ) -> Self {
-        Self {
-            r_dir,
-            l_dir,
-            pwm_right,
-            pwm_left,
+    fn new(dir: Output<'a>, pwm: channel::Channel<'a, LowSpeed>) -> Self {
+        Self { dir, pwm }
+    }
+
+    fn set_motion(&mut self, direction: MotorDirection, speed: u16, fade_ms: u16) {
+        let speed_clamped = speed.min(100) as u8;
+
+        match direction {
+            MotorDirection::Clockwise => {
+                self.dir.set_low();
+                self.pwm.start_duty_fade(0, speed as u8, fade_ms);
+            }
+            MotorDirection::CounterClockwise => {
+                self.dir.set_high();
+                loop {
+                    self.pwm.set_duty(0);
+                    break;
+                }
+            }
+            MotorDirection::Brake => {
+                self.dir.set_low();
+                self.pwm.start_duty_fade(0, 0, fade_ms);
+            }
         }
     }
-    fn execute_motion(&mut self, motion: Motion, speed: u16, fade_ms: u16) {
-        let speed_clamped = speed.min(100);
-        let halved: u8 = speed as u8 / 3;
+}
+
+struct DifferentialDrive<'a> {
+    motor_left: MotorController<'a>,
+    motor_right: MotorController<'a>,
+}
+
+impl<'a> DifferentialDrive<'a> {
+    fn new(motor_left: MotorController<'a>, motor_right: MotorController<'a>) -> Self {
+        Self {
+            motor_left,
+            motor_right,
+        }
+    }
+
+    /// Execute vehicle motion command with differential motor control
+    fn execute(&mut self, motion: VehicleMotion, speed: u16, fade_ms: u16) {
+        let speed_reduced = (speed / 3).min(100);
+        let speed_reduced1 = speed.min(100);
         match motion {
-            Motion::Forward => {
-                info!("forward motion");
-                self.r_dir.set_high();
-                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
-                self.l_dir.set_low();
-                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
+            VehicleMotion::Forward => {
+                self.motor_left
+                    .set_motion(MotorDirection::Clockwise, speed_reduced1, fade_ms);
+                self.motor_right.set_motion(
+                    MotorDirection::CounterClockwise,
+                    speed_reduced1,
+                    fade_ms,
+                );
             }
-
-            Motion::Backward => {
-                info!("Backward motion");
-                self.r_dir.set_low();
-                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
-                self.l_dir.set_high();
-                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
+            VehicleMotion::Backward => {
+                self.motor_left
+                    .set_motion(MotorDirection::CounterClockwise, speed, fade_ms);
+                self.motor_right
+                    .set_motion(MotorDirection::Clockwise, speed, fade_ms);
             }
-
-            Motion::Left => {
-                info!("LEFT TURN");
-                self.r_dir.set_high();
-                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
-                self.l_dir.set_low();
-                self.pwm_left.start_duty_fade(0, halved, fade_ms);
+            VehicleMotion::Right => {
+                self.motor_left
+                    .set_motion(MotorDirection::Clockwise, speed, fade_ms);
+                self.motor_right.set_motion(
+                    MotorDirection::CounterClockwise,
+                    speed_reduced,
+                    fade_ms,
+                );
             }
-
-            Motion::Right => {
-                info!("RIGHT TURN");
-                self.r_dir.set_low();
-                self.pwm_right.start_duty_fade(0, halved, fade_ms);
-                self.l_dir.set_high();
-                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
+            VehicleMotion::Left => {
+                self.motor_left
+                    .set_motion(MotorDirection::Clockwise, speed_reduced, fade_ms);
+                self.motor_right
+                    .set_motion(MotorDirection::CounterClockwise, speed, fade_ms);
             }
-            Motion::SpinCW => {
-                info!("CLOCKWISE SPIN");
-                self.r_dir.set_low();
-                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
-                self.r_dir.set_low();
-                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
+            VehicleMotion::SpinCW => {
+                self.motor_left
+                    .set_motion(MotorDirection::Clockwise, speed, fade_ms);
+                self.motor_right
+                    .set_motion(MotorDirection::Clockwise, speed, fade_ms);
             }
-
-            Motion::SpinCCW => {
-                info!("COUNTER CLOCKWISE SPIN");
-                self.r_dir.set_high();
-                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
-                self.r_dir.set_high();
-                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
+            VehicleMotion::SpinCCW => {
+                self.motor_left
+                    .set_motion(MotorDirection::CounterClockwise, speed, fade_ms);
+                self.motor_right
+                    .set_motion(MotorDirection::CounterClockwise, speed, fade_ms);
             }
-            Motion::Stop => {
-                info!("COMPLETE STOP");
-                self.r_dir.set_low();
-                self.l_dir.set_low();
-
-                self.pwm_right.start_duty_fade(0, 0, fade_ms);
-                self.pwm_left.start_duty_fade(0, 0, fade_ms);
+            VehicleMotion::Stop => {
+                self.motor_left
+                    .set_motion(MotorDirection::Brake, 0, fade_ms);
+                self.motor_right
+                    .set_motion(MotorDirection::Brake, 0, fade_ms);
             }
         }
     }
@@ -132,60 +160,79 @@ fn main() -> ! {
     let outconfig = OutputConfig::default();
     let inconfig = InputConfig::default();
 
-    // H-BRIDGE DIRECTION CONTROL PINS (STATIC OUTPUT)
-    let mut r_dir = Output::new(peripherals.GPIO9, Level::Low, outconfig); // DIR
-    let r_pwm = peripherals.GPIO10; // PWM
+    // H-BRIDGE INTERFACE ALLOCATION
+    let r_dir = Output::new(peripherals.GPIO9, Level::Low, outconfig);
+    let r_pwm = peripherals.GPIO10;
+    let l_dir = Output::new(peripherals.GPIO2, Level::Low, outconfig);
+    let l_pwm = peripherals.GPIO3;
 
-    let mut l_dir = Output::new(peripherals.GPIO2, Level::Low, outconfig); // DIR
-    let l_pwm = peripherals.GPIO3; // PWM
-
+    // LEDC PWM SUBSYSTEM INITIALIZATION
     let mut ledc = Ledc::new(peripherals.LEDC);
     ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
 
+    // RIGHT MOTOR PWM TIMER (10-BIT RESOLUTION)
     let mut lstimer0 = ledc.timer::<LowSpeed>(timer::Number::Timer0);
     lstimer0.configure(timer::config::Config {
         duty: timer::config::Duty::Duty10Bit,
         clock_source: timer::LSClockSource::APBClk,
-        frequency: Rate::from_khz(1),
+        frequency: Rate::from_khz(20),
     });
+
     let mut channel0 = ledc.channel(channel::Number::Channel0, r_pwm);
     channel0.configure(channel::config::Config {
         timer: &lstimer0,
-        duty_pct: 15,
+        duty_pct: 0,
         drive_mode: DriveMode::PushPull,
     });
 
-    // left
-    let mut lstimer1 = ledc.timer::<LowSpeed>(timer::Number::Timer1);
-
-    lstimer1.configure(timer::config::Config {
-        duty: timer::config::Duty::Duty5Bit,
-        clock_source: timer::LSClockSource::APBClk,
-        frequency: Rate::from_khz(1),
-    });
+    // LEFT MOTOR PWM TIMER (10-BIT RESOLUTION, SHARED TIMER)
     let mut channel1 = ledc.channel(channel::Number::Channel1, l_pwm);
     channel1.configure(channel::config::Config {
         timer: &lstimer0,
-        duty_pct: 15,
+        duty_pct: 0,
         drive_mode: DriveMode::PushPull,
     });
-    // INPUT SENSOR ACQUISITION
+
+    // SENSOR INPUT ACQUISITION (RESERVED)
     let _gpio7 = Input::new(peripherals.GPIO7, inconfig);
     let _gpio8 = Input::new(peripherals.GPIO8, inconfig);
 
-    // MOTOR CONTROLLER INSTANTIATION (CORRECTED OWNERSHIP)
+    // INSTANTIATE MOTOR CONTROLLERS
+    let motor_right = MotorController::new(r_dir, channel0);
+    let motor_left = MotorController::new(l_dir, channel1);
 
-    //let mut motor = MotorController::new(r_dir, l_dir, channel0, channel1, &motor_cfg);
+    // INSTANTIATE DIFFERENTIAL DRIVE CONTROLLER
+    let mut drive = DifferentialDrive::new(motor_left, motor_right);
+
     let mut delay = Delay::new();
 
-    info!("MOTOR_CONTROLLER_INITIALIZED: ENTERING_MAIN_CONTROL_LOOP");
+    info!("DIFFERENTIAL_DRIVE_INITIALIZED: ENTERING_OPERATIONAL_LOOP");
 
-    let mut Motor = MotorController::new(r_dir, l_dir, channel0, channel1);
+    // MAIN CONTROL LOOP
     loop {
-        Motor.execute_motion(Motion::Forward, 100, 100);
+        info!("forward");
+        drive.execute(VehicleMotion::Forward, 100, 300);
+        delay.delay_millis(4000);
+
+        info!("backward");
+
+        drive.execute(VehicleMotion::Backward, 100, 300);
+        delay.delay_millis(4000);
+
+        info!("Left turn");
+        drive.execute(VehicleMotion::Left, 100, 300);
         delay.delay_millis(1000);
-        Motor.execute_motion(Motion::Backward, 100, 100);
+
+        info!("Right turn");
+        drive.execute(VehicleMotion::Right, 100, 400);
         delay.delay_millis(1000);
-        // FORWARD VECTOR: BOTH MOTORS
+
+        info!("Spin CW");
+        drive.execute(VehicleMotion::SpinCW, 100, 400);
+        delay.delay_millis(2000);
+
+        info!("Spin CCW");
+        drive.execute(VehicleMotion::SpinCCW, 100, 400);
+        delay.delay_millis(2000);
     }
 }
