@@ -166,7 +166,7 @@ fn main() -> ! {
     let l_dir = Output::new(peripherals.GPIO2, Level::Low, outconfig);
     let l_pwm = peripherals.GPIO3;
 
-    // LEDC PWM SUBSYSTEM INITIALIZATION
+
     let mut ledc = Ledc::new(peripherals.LEDC);
     ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
 
@@ -193,7 +193,7 @@ fn main() -> ! {
         drive_mode: DriveMode::PushPull,
     });
 
-    // SENSOR INPUT ACQUISITION (RESERVED)
+
     let _gpio7 = Input::new(peripherals.GPIO7, inconfig);
     let _gpio8 = Input::new(peripherals.GPIO8, inconfig);
 
@@ -201,7 +201,7 @@ fn main() -> ! {
     let motor_right = MotorController::new(r_dir, channel0);
     let motor_left = MotorController::new(l_dir, channel1);
 
-    // INSTANTIATE DIFFERENTIAL DRIVE CONTROLLER
+ 
     let mut drive = DifferentialDrive::new(motor_left, motor_right);
 
     let mut delay = Delay::new();
