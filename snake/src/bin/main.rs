@@ -93,7 +93,6 @@ impl<'a> DifferentialDrive<'a> {
         }
     }
 
-    /// Execute vehicle motion command with differential motor control
     fn execute(&mut self, motion: VehicleMotion, speed: u16, fade_ms: u16) {
         let speed_reduced = (speed / 3).min(100);
         let speed_reduced1 = speed.min(100);
@@ -150,6 +149,26 @@ impl<'a> DifferentialDrive<'a> {
     }
 }
 
+struct Sensor<'u> {
+    right: Input<'u>,
+    center: Input<'u>,
+    left: Input<'u>,
+}
+
+impl<'u> Sensor<'u> {
+    fn default(mut right: Input<'u>, mut center: Input<'u>, mut left: Input<'u>) -> Self {
+        right.is_high();
+        left.is_high();
+        center.is_low();
+
+        Self {
+            right,
+            center,
+            left,
+        }
+    }
+}
+
 esp_bootloader_esp_idf::esp_app_desc!();
 
 #[main]
@@ -165,7 +184,6 @@ fn main() -> ! {
     let r_pwm = peripherals.GPIO10;
     let l_dir = Output::new(peripherals.GPIO2, Level::Low, outconfig);
     let l_pwm = peripherals.GPIO3;
-
 
     let mut ledc = Ledc::new(peripherals.LEDC);
     ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
@@ -193,22 +211,18 @@ fn main() -> ! {
         drive_mode: DriveMode::PushPull,
     });
 
-
     let _gpio7 = Input::new(peripherals.GPIO7, inconfig);
     let _gpio8 = Input::new(peripherals.GPIO8, inconfig);
 
-    // INSTANTIATE MOTOR CONTROLLERS
     let motor_right = MotorController::new(r_dir, channel0);
     let motor_left = MotorController::new(l_dir, channel1);
 
- 
     let mut drive = DifferentialDrive::new(motor_left, motor_right);
 
     let mut delay = Delay::new();
 
     info!("DIFFERENTIAL_DRIVE_INITIALIZED: ENTERING_OPERATIONAL_LOOP");
 
-    // MAIN CONTROL LOOP
     loop {
         info!("forward");
         drive.execute(VehicleMotion::Forward, 100, 300);
