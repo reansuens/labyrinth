@@ -29,32 +29,14 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 }
 
 #[derive(Clone, Copy)]
-enum MotorSelect {
-    Right,
-    Left,
-}
-
-#[derive(Clone, Copy)]
-enum Direction {
+enum Motion {
     Forward,
     Backward,
-    Brake,
-    Coast,
-}
-
-#[derive(Debug, Clone)]
-struct MotorConfig {
-    frequency: u32,
-    duty_resolution: u8,
-}
-
-impl Default for MotorConfig {
-    fn default() -> Self {
-        Self {
-            frequency: 15000,
-            duty_resolution: 10,
-        }
-    }
+    Right,
+    Left,
+    SpinCW,
+    SpinCCW,
+    Stop,
 }
 
 struct MotorController<'a> {
@@ -62,7 +44,6 @@ struct MotorController<'a> {
     l_dir: Output<'a>,
     pwm_right: channel::Channel<'a, LowSpeed>,
     pwm_left: channel::Channel<'a, LowSpeed>,
-    max_duty: u32,
 }
 
 impl<'a> MotorController<'a> {
@@ -71,103 +52,73 @@ impl<'a> MotorController<'a> {
         l_dir: Output<'a>,
         pwm_right: channel::Channel<'a, LowSpeed>,
         pwm_left: channel::Channel<'a, LowSpeed>,
-        config: &MotorConfig,
     ) -> Self {
-        let max_duty = (1u32 << config.duty_resolution) - 1;
-
         Self {
             r_dir,
             l_dir,
             pwm_right,
             pwm_left,
-            max_duty,
         }
     }
-
-    fn set_motor(&mut self, motor: MotorSelect, speed: u8, direction: Direction) {
-        let speed = speed.min(100);
-        let duty: u32 = (speed as u32 * self.max_duty) / 100;
-
-        match motor {
-            MotorSelect::Right => {
-                match direction {
-                    Direction::Forward => self.r_dir.set_high(),
-                    Direction::Backward => self.r_dir.set_low(),
-                    _ => {
-                        self.pwm_right.set_duty(0);
-                        return;
-                    }
-                }
-                self.pwm_right.set_duty(duty as u8);
+    fn execute_motion(&mut self, motion: Motion, speed: u16, fade_ms: u16) {
+        let speed_clamped = speed.min(100);
+        let halved: u8 = speed as u8 / 3;
+        match motion {
+            Motion::Forward => {
+                info!("forward motion");
+                self.r_dir.set_high();
+                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
+                self.l_dir.set_low();
+                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
             }
 
-            MotorSelect::Left => {
-                match direction {
-                    Direction::Forward => self.l_dir.set_high(),
-                    Direction::Backward => self.l_dir.set_low(),
-                    _ => {
-                        self.pwm_left.set_duty(0);
-                        return;
-                    }
-                }
-                self.pwm_left.set_duty(duty as u8);
+            Motion::Backward => {
+                info!("Backward motion");
+                self.r_dir.set_low();
+                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
+                self.l_dir.set_high();
+                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
+            }
+
+            Motion::Left => {
+                info!("LEFT TURN");
+                self.r_dir.set_high();
+                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
+                self.l_dir.set_low();
+                self.pwm_left.start_duty_fade(0, halved, fade_ms);
+            }
+
+            Motion::Right => {
+                info!("RIGHT TURN");
+                self.r_dir.set_low();
+                self.pwm_right.start_duty_fade(0, halved, fade_ms);
+                self.l_dir.set_high();
+                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
+            }
+            Motion::SpinCW => {
+                info!("CLOCKWISE SPIN");
+                self.r_dir.set_low();
+                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
+                self.r_dir.set_low();
+                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
+            }
+
+            Motion::SpinCCW => {
+                info!("COUNTER CLOCKWISE SPIN");
+                self.r_dir.set_high();
+                self.pwm_right.start_duty_fade(0, speed as u8, fade_ms);
+                self.r_dir.set_high();
+                self.pwm_left.start_duty_fade(0, speed as u8, fade_ms);
+            }
+            Motion::Stop => {
+                info!("COMPLETE STOP");
+                self.r_dir.set_low();
+                self.l_dir.set_low();
+
+                self.pwm_right.start_duty_fade(0, 0, fade_ms);
+                self.pwm_left.start_duty_fade(0, 0, fade_ms);
             }
         }
-    }
-
-    fn update_frequency(
-        &mut self,
-        config: &MotorConfig,
-        timer0: &mut timer::Timer<'a, LowSpeed>,
-        timer1: &mut timer::Timer<'a, LowSpeed>,
-    ) {
-        let new_freq = Rate::from_hz(config.frequency);
-
-        let duty_mode = match config.duty_resolution {
-            1 => timer::config::Duty::Duty1Bit,
-            2 => timer::config::Duty::Duty2Bit,
-            3 => timer::config::Duty::Duty3Bit,
-            4 => timer::config::Duty::Duty4Bit,
-            5 => timer::config::Duty::Duty5Bit,
-            6 => timer::config::Duty::Duty6Bit,
-            7 => timer::config::Duty::Duty7Bit,
-            8 => timer::config::Duty::Duty8Bit,
-            9 => timer::config::Duty::Duty9Bit,
-            10 => timer::config::Duty::Duty10Bit,
-            11 => timer::config::Duty::Duty11Bit,
-            12 => timer::config::Duty::Duty12Bit,
-            13 => timer::config::Duty::Duty13Bit,
-            14 => timer::config::Duty::Duty14Bit,
-            _ => timer::config::Duty::Duty10Bit,
-        };
-
-        timer0
-            .configure(timer::config::Config {
-                duty: duty_mode,
-                clock_source: timer::LSClockSource::APBClk,
-                frequency: new_freq,
-            })
-            .ok();
-
-        timer1
-            .configure(timer::config::Config {
-                duty: duty_mode,
-                clock_source: timer::LSClockSource::APBClk,
-                frequency: new_freq,
-            })
-            .ok();
-
-        self.max_duty = (1u32 << config.duty_resolution) - 1;
-
-        info!(
-            "PWM_CARRIER_RECONFIGURED: f={} Hz, N={} bit, max_duty={}",
-            new_freq, config.duty_resolution, self.max_duty
-        );
-    }
-
-    fn stop(&mut self) {
-        self.set_motor(MotorSelect::Right, 0, Direction::Coast);
-        self.set_motor(MotorSelect::Left, 0, Direction::Coast);
     }
 }
 
@@ -182,10 +133,10 @@ fn main() -> ! {
     let inconfig = InputConfig::default();
 
     // H-BRIDGE DIRECTION CONTROL PINS (STATIC OUTPUT)
-    let r_dir = Output::new(peripherals.GPIO9, Level::Low, outconfig); // DIR
+    let mut r_dir = Output::new(peripherals.GPIO9, Level::Low, outconfig); // DIR
     let r_pwm = peripherals.GPIO10; // PWM
 
-    let l_dir = Output::new(peripherals.GPIO2, Level::Low, outconfig); // DIR
+    let mut l_dir = Output::new(peripherals.GPIO2, Level::Low, outconfig); // DIR
     let l_pwm = peripherals.GPIO3; // PWM
 
     let mut ledc = Ledc::new(peripherals.LEDC);
@@ -195,7 +146,7 @@ fn main() -> ! {
     lstimer0.configure(timer::config::Config {
         duty: timer::config::Duty::Duty10Bit,
         clock_source: timer::LSClockSource::APBClk,
-        frequency: Rate::from_khz(20),
+        frequency: Rate::from_khz(1),
     });
     let mut channel0 = ledc.channel(channel::Number::Channel0, r_pwm);
     channel0.configure(channel::config::Config {
@@ -210,7 +161,7 @@ fn main() -> ! {
     lstimer1.configure(timer::config::Config {
         duty: timer::config::Duty::Duty5Bit,
         clock_source: timer::LSClockSource::APBClk,
-        frequency: Rate::from_khz(20),
+        frequency: Rate::from_khz(1),
     });
     let mut channel1 = ledc.channel(channel::Number::Channel1, l_pwm);
     channel1.configure(channel::config::Config {
@@ -218,34 +169,23 @@ fn main() -> ! {
         duty_pct: 15,
         drive_mode: DriveMode::PushPull,
     });
+    // INPUT SENSOR ACQUISITION
     let _gpio7 = Input::new(peripherals.GPIO7, inconfig);
     let _gpio8 = Input::new(peripherals.GPIO8, inconfig);
 
-    let motor_cfg = MotorConfig::default();
+    // MOTOR CONTROLLER INSTANTIATION (CORRECTED OWNERSHIP)
 
-    let mut motor = MotorController::new(r_dir, l_dir, channel0, channel1, &motor_cfg);
+    //let mut motor = MotorController::new(r_dir, l_dir, channel0, channel1, &motor_cfg);
     let mut delay = Delay::new();
 
     info!("MOTOR_CONTROLLER_INITIALIZED: ENTERING_MAIN_CONTROL_LOOP");
 
+    let mut Motor = MotorController::new(r_dir, l_dir, channel0, channel1);
     loop {
-        info!("forward");
-        motor.set_motor(MotorSelect::Right, 80, Direction::Forward);
-        motor.set_motor(MotorSelect::Left, 80, Direction::Forward);
-        delay.delay_millis(5000);
-
-        info!("Backward");
-        motor.set_motor(MotorSelect::Right, 90, Direction::Backward);
-        motor.set_motor(MotorSelect::Left, 90, Direction::Backward);
-        delay.delay_millis(5000);
-
-        info!("Brake");
-        motor.set_motor(MotorSelect::Right, 0, Direction::Brake);
-        motor.set_motor(MotorSelect::Left, 0, Direction::Brake);
+        Motor.execute_motion(Motion::Forward, 100, 100);
         delay.delay_millis(1000);
-
-        info!("force stop = coast");
-        motor.stop();
+        Motor.execute_motion(Motion::Backward, 100, 100);
         delay.delay_millis(1000);
+        // FORWARD VECTOR: BOTH MOTORS
     }
 }
