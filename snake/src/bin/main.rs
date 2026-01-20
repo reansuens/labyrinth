@@ -74,7 +74,10 @@ impl<'a> MotorController<'a> {
             }
             MotorDirection::Brake => {
                 self.dir.set_low();
-                self.pwm.start_duty_fade(0, 0, fade_ms);
+                loop {
+                    self.pwm.set_duty(0);
+                    break;
+                }
             }
         }
     }
@@ -114,26 +117,23 @@ impl<'a> DifferentialDrive<'a> {
             }
             VehicleMotion::Right => {
                 self.motor_left
-                    .set_motion(MotorDirection::Clockwise, speed, fade_ms);
-                self.motor_right.set_motion(
-                    MotorDirection::CounterClockwise,
-                    speed_reduced,
-                    fade_ms,
-                );
-            }
-            VehicleMotion::Left => {
-                self.motor_left
-                    .set_motion(MotorDirection::Clockwise, speed_reduced, fade_ms);
+                    .set_motion(MotorDirection::Brake, 0, fade_ms);
                 self.motor_right
                     .set_motion(MotorDirection::CounterClockwise, speed, fade_ms);
             }
-            VehicleMotion::SpinCW => {
+            VehicleMotion::Left => {
+                self.motor_right
+                    .set_motion(MotorDirection::Brake, 0, fade_ms);
+                self.motor_left
+                    .set_motion(MotorDirection::Clockwise, speed, fade_ms);
+            }
+            VehicleMotion::SpinCCW => {
                 self.motor_left
                     .set_motion(MotorDirection::Clockwise, speed, fade_ms);
                 self.motor_right
                     .set_motion(MotorDirection::Clockwise, speed, fade_ms);
             }
-            VehicleMotion::SpinCCW => {
+            VehicleMotion::SpinCW => {
                 self.motor_left
                     .set_motion(MotorDirection::CounterClockwise, speed, fade_ms);
                 self.motor_right
@@ -158,8 +158,8 @@ struct Sensor<'u> {
 impl<'u> Sensor<'u> {
     fn default(mut right: Input<'u>, mut center: Input<'u>, mut left: Input<'u>) -> Self {
         right.is_high();
-        left.is_high();
         center.is_low();
+        left.is_high();
 
         Self {
             right,
@@ -211,6 +211,15 @@ fn main() -> ! {
         drive_mode: DriveMode::PushPull,
     });
 
+    let mut sensor_right = Input::new(peripherals.GPIO4, inconfig);
+    let mut sensor_center = Input::new(peripherals.GPIO5, inconfig);
+    let mut sensor_left = Input::new(peripherals.GPIO6, inconfig);
+    let mut sensors: Sensor = Sensor {
+        right: sensor_right,
+        center: sensor_center,
+        left: sensor_left,
+    };
+
     let _gpio7 = Input::new(peripherals.GPIO7, inconfig);
     let _gpio8 = Input::new(peripherals.GPIO8, inconfig);
 
@@ -226,12 +235,12 @@ fn main() -> ! {
     loop {
         info!("forward");
         drive.execute(VehicleMotion::Forward, 100, 300);
-        delay.delay_millis(4000);
+        delay.delay_millis(1000);
 
         info!("backward");
 
         drive.execute(VehicleMotion::Backward, 100, 300);
-        delay.delay_millis(4000);
+        delay.delay_millis(1000);
 
         info!("Left turn");
         drive.execute(VehicleMotion::Left, 100, 300);
@@ -241,12 +250,17 @@ fn main() -> ! {
         drive.execute(VehicleMotion::Right, 100, 400);
         delay.delay_millis(1000);
 
-        info!("Spin CW");
-        drive.execute(VehicleMotion::SpinCW, 100, 400);
-        delay.delay_millis(2000);
-
         info!("Spin CCW");
         drive.execute(VehicleMotion::SpinCCW, 100, 400);
-        delay.delay_millis(2000);
+        delay.delay_millis(1000);
+
+        info!("Spin CW");
+        drive.execute(VehicleMotion::SpinCW, 100, 400);
+        delay.delay_millis(1000);
+
+        info!("Brake");
+
+        drive.execute(VehicleMotion::Stop, 100, 400);
+        delay.delay_millis(9000);
     }
 }
