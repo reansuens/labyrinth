@@ -149,6 +149,7 @@ impl<'a> DifferentialDrive<'a> {
     }
 }
 
+//sensors
 struct Sensor<'u> {
     right: Input<'u>,
     center: Input<'u>,
@@ -156,16 +157,29 @@ struct Sensor<'u> {
 }
 
 impl<'u> Sensor<'u> {
-    fn default(mut right: Input<'u>, mut center: Input<'u>, mut left: Input<'u>) -> Self {
-        right.is_high();
-        center.is_low();
-        left.is_high();
+    fn red(&mut self, right: bool, center: bool, left: bool) -> (bool, bool, bool) {
+        (
+            self.right.is_high(),
+            self.center.is_low(),
+            self.left.is_high(),
+        )
+    }
+}
 
-        Self {
-            right,
-            center,
-            left,
-        }
+// maze
+const ROWS: u8 = 6;
+const COLUMNS: u8 = 6;
+const QUEUE_SIZE_MAX: u8 = ROWS * COLUMNS;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct coordinates {
+    rows: u8,
+    columns: u8,
+}
+
+impl coordinates {
+    const fn new(rows: u8, columns: u8) -> Self {
+        Self { rows, columns }
     }
 }
 
@@ -222,7 +236,7 @@ fn main() -> ! {
 
     let _gpio7 = Input::new(peripherals.GPIO7, inconfig);
     let _gpio8 = Input::new(peripherals.GPIO8, inconfig);
-
+    
     let motor_right = MotorController::new(r_dir, channel0);
     let motor_left = MotorController::new(l_dir, channel1);
 
@@ -261,6 +275,6 @@ fn main() -> ! {
         info!("Brake");
 
         drive.execute(VehicleMotion::Stop, 100, 400);
-        delay.delay_millis(9000);
+        delay.delay_millis(500);
     }
 }
