@@ -629,6 +629,6 @@ fn main() -> ! {
         drive.execute(VehicleMotion::Stop, 100, 300);
         info!("Cell traversal complete, total edges counted: {}", edges);
 
-        delay.delay_millis(500); // pause before next cell
+        delay.delay_millis(500); 
     }
 }
