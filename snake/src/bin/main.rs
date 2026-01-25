@@ -403,6 +403,7 @@ impl Maze {
         );
 
         // Active-low correction: invert sensor logic
+        //
         let wall_left = !wall_left;
         let wall_front = !wall_front;
         let wall_right = !wall_right;
