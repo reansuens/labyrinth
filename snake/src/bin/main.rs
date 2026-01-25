@@ -163,6 +163,7 @@ enum IsWall {
 }
 
 impl<'u> Sensor<'u> {
+    //true = wall present
     fn read(
         &mut self,
         walled: IsWall,
@@ -242,6 +243,24 @@ struct Maze {
     goal_y: usize,
 }
 
+enum Heading {
+    North = 0,
+    East = 1,
+    South = 2,
+    West = 3,
+}
+impl Heading {
+    fn delta(self, target: Heading) -> i8 {
+        let raw_delta = (target as i8 - self as i8 + 4) % 4;
+        // Normalize to [-2, 2] for shortest rotation
+        if raw_delta > 2 {
+            raw_delta - 4
+        } else {
+            raw_delta
+        }
+    }
+}
+
 impl Maze {
     fn new(
         cells: [[Cell; ROWS]; ROWS],
@@ -260,24 +279,23 @@ impl Maze {
             goal_y,
         }
     }
+
     fn resolve_forward_scan(
         &mut self,
         encoders: &mut Encoders,
         sensor: &mut Sensor,
         drive: &mut DifferentialDrive,
     ) -> Option<(bool, bool, bool)> {
-        // PHASE 1: Execute forward motion primitive
         encoders.forward_one(drive);
-
-        // PHASE 2: Update robot pose based on current heading
         match self.robot_heading {
             Heading::North => {
                 if self.robot_x > 0 {
                     self.robot_x -= 1;
                 } else {
-                    return None; // Boundary collision detected
+                    return None;
                 }
             }
+
             Heading::East => {
                 if self.robot_y < COLUMNS - 1 {
                     self.robot_y += 1;
@@ -300,26 +318,18 @@ impl Maze {
                 }
             }
         }
-
-        // PHASE 3: Acquire sensor data (active-low correction)
         let left_raw = sensor.left.is_high();
         let center_raw = sensor.center.is_high();
         let right_raw = sensor.right.is_high();
 
-        // Invert for active-low sensors (LOW = wall present)
         let wall_left = !left_raw;
-        let wall_front = !center_raw;
+        let wall_center = !center_raw;
         let wall_right = !right_raw;
 
-        // PHASE 4: Update wall topology for current cell
-        self.wall_state(sensor, wall_left, wall_front, wall_right);
+        self.wall_state_update(wall_left, wall_center, wall_right);
 
-        // PHASE 5: Conditional double-step if corridor detected
-        if !wall_left && !wall_front && !wall_right {
-            // Open corridor — execute second cell traversal
+        if !wall_left && !wall_center && !wall_right {
             encoders.forward_one(drive);
-
-            // Update pose again
             match self.robot_heading {
                 Heading::North => {
                     if self.robot_x > 0 {
@@ -344,42 +354,82 @@ impl Maze {
             }
         }
 
-        // PHASE 6: Return processed sensor state
-        Some((wall_left, wall_front, wall_right))
+        Some((wall_left, wall_center, wall_right))
     }
+
+    fn wall_state_update(&mut self, wall_left: bool, wall_center: bool, wall_right: bool) {
+        let current_walls = &mut self.cells[self.robot_x][self.robot_y].walls;
+        match self.robot_heading {
+            Heading::North => {
+                if wall_left {
+                    *current_walls |= WallState::WEST;
+                }
+                if wall_center {
+                    *current_walls |= WallState::NORTH;
+                }
+                if wall_right {
+                    *current_walls |= WallState::EAST;
+                }
+            }
+            Heading::East => {
+                if wall_left {
+                    *current_walls |= WallState::NORTH;
+                }
+                if wall_center {
+                    *current_walls |= WallState::EAST;
+                }
+                if wall_right {
+                    *current_walls |= WallState::SOUTH;
+                }
+            }
+            Heading::South => {
+                if wall_left {
+                    *current_walls |= WallState::EAST;
+                }
+                if wall_center {
+                    *current_walls |= WallState::SOUTH;
+                }
+                if wall_right {
+                    *current_walls |= WallState::WEST;
+                }
+            }
+            Heading::West => {
+                if wall_left {
+                    *current_walls |= WallState::SOUTH;
+                }
+                if wall_center {
+                    *current_walls |= WallState::WEST;
+                }
+                if wall_right {
+                    *current_walls |= WallState::NORTH;
+                }
+            }
+        }
+    }
+
     fn flood_fill(&mut self) {
-        // Initialize distance field to maximum
         for row in 0..ROWS {
             for col in 0..COLUMNS {
                 self.cells[row][col].distance = u8::MAX;
             }
         }
 
-        // Seed goal cell
         self.cells[self.goal_x][self.goal_y].distance = 0;
-
-        // BFS queue allocation (circular buffer preferred for determinism)
         let mut queue: [(usize, usize); QUEUE_SIZE_MAX] = [(0, 0); QUEUE_SIZE_MAX];
         let mut head: usize = 0;
         let mut tail: usize = 0;
-
         queue[tail] = (self.goal_x, self.goal_y);
         tail = (tail + 1) % QUEUE_SIZE_MAX;
 
         while head != tail {
             let (x, y) = queue[head];
             head = (head + 1) % QUEUE_SIZE_MAX;
-
             let current_dist = self.cells[x][y].distance;
-
-            // Check all cardinal neighbors (N, E, S, W)
             let neighbors = [
-                (x.wrapping_sub(1), y, WallState::NORTH), // North
-                (x, y + 1, WallState::EAST),              // East
-                (x + 1, y, WallState::SOUTH),             // South
-                (x, y.wrapping_sub(1), WallState::WEST),  // West
+                (x.wrapping_sub(1), y, WallState::NORTH),
+                (x, y + 1, WallState::EAST),
+                (x, y.wrapping_sub(1), WallState::WEST),
             ];
-
             for &(nx, ny, wall_bit) in &neighbors {
                 if nx < ROWS && ny < COLUMNS {
                     // Check if wall exists in current cell
@@ -394,78 +444,14 @@ impl Maze {
             }
         }
     }
-    fn wall_state(&mut self, sensor: &mut Sensor, left: bool, center: bool, right: bool) {
-        let (wall_left, wall_front, wall_right) = sensor.read(
-            IsWall::Front, // Placeholder — adjust based on physical sensor orientation
-            left,
-            center,
-            right,
-        );
 
-        // Active-low correction: invert sensor logic
-        //
-        let wall_left = !wall_left;
-        let wall_front = !wall_front;
-        let wall_right = !wall_right;
-
-        // Map relative walls to absolute directions
-        let current_walls = &mut self.cells[self.robot_x][self.robot_y].walls;
-
-        match self.robot_heading {
-            Heading::North => {
-                if wall_left {
-                    *current_walls |= WallState::WEST;
-                }
-                if wall_front {
-                    *current_walls |= WallState::NORTH;
-                }
-                if wall_right {
-                    *current_walls |= WallState::EAST;
-                }
-            }
-            Heading::East => {
-                if wall_left {
-                    *current_walls |= WallState::NORTH;
-                }
-                if wall_front {
-                    *current_walls |= WallState::EAST;
-                }
-                if wall_right {
-                    *current_walls |= WallState::SOUTH;
-                }
-            }
-            Heading::South => {
-                if wall_left {
-                    *current_walls |= WallState::EAST;
-                }
-                if wall_front {
-                    *current_walls |= WallState::SOUTH;
-                }
-                if wall_right {
-                    *current_walls |= WallState::WEST;
-                }
-            }
-            Heading::West => {
-                if wall_left {
-                    *current_walls |= WallState::SOUTH;
-                }
-                if wall_front {
-                    *current_walls |= WallState::WEST;
-                }
-                if wall_right {
-                    *current_walls |= WallState::NORTH;
-                }
-            }
-        }
-    }
-    fn resolve_policy_step(&mut self) -> Option<(usize, usize)> {
+    fn resolve_policy_step(&mut self) -> Option<(usize, usize, i8)> {
         let (x, y) = (self.robot_x, self.robot_y);
         let current_dist = self.cells[x][y].distance;
 
         let mut best_neighbor: Option<(usize, usize)> = None;
         let mut min_distance = current_dist;
 
-        // Evaluate neighbors (N, E, S, W)
         let neighbors = [
             (x.wrapping_sub(1), y, WallState::NORTH),
             (x, y + 1, WallState::EAST),
@@ -475,7 +461,6 @@ impl Maze {
 
         for &(nx, ny, wall_bit) in &neighbors {
             if nx < ROWS && ny < COLUMNS {
-                // Check accessibility
                 if (self.cells[x][y].walls & wall_bit) == 0 {
                     if self.cells[nx][ny].distance < min_distance {
                         min_distance = self.cells[nx][ny].distance;
@@ -485,12 +470,15 @@ impl Maze {
             }
         }
 
-        best_neighbor
+        if let Some((target_x, target_y)) = best_neighbor {
+            let required_heading = self.compute_required_heading(target_x, target_y);
+            let heading_delta = self.robot_heading.delta(required_heading);
+            return Some((target_x, target_y, heading_delta));
+        }
+        None
     }
-
-    fn update_robot_pose(&mut self, target_x: usize, target_y: usize) {
-        // Determine required heading
-        let required_heading = if target_x < self.robot_x {
+    fn compute_required_heading(&mut self, target_x: usize, target_y: usize) -> Heading {
+        if target_x < self.robot_x {
             Heading::North
         } else if target_x > self.robot_x {
             Heading::South
@@ -498,20 +486,65 @@ impl Maze {
             Heading::East
         } else {
             Heading::West
-        };
+        }
+    }
 
-        // Update position
+    fn update_robot_pose(&mut self, target_x: usize, target_y: usize) {
+        let required_heading = if target_x < self.robot_x {
+            Heading::North
+        } else if target_x > self.robot_x {
+            Heading::South
+        } else if target_y < self.robot_y {
+            Heading::West
+        } else {
+            Heading::East
+        };
         self.robot_x = target_x;
         self.robot_y = target_y;
         self.robot_heading = required_heading;
     }
-}
 
-enum Heading {
-    North = 0,
-    East = 1,
-    South = 2,
-    West = 3,
+    fn excute_rotation(
+        &mut self,
+        heading_delta: i8,
+        drive: &mut DifferentialDrive,
+        delay: &mut Delay,
+    ) {
+        const ROTATION_90_MS: u32 = 780;
+        const ROTATION_180_MS: u32 = 1500;
+
+        match heading_delta {
+            1 | -3 => {
+                drive.execute(VehicleMotion::SpinCW, 100, 300);
+                delay.delay_millis(ROTATION_90_MS);
+                drive.execute(VehicleMotion::Stop, 0, 0);
+
+                self.robot_heading = match self.robot_heading {
+                    Heading::North => Heading::East,
+                    Heading::East => Heading::South,
+                    Heading::South => Heading::West,
+                    Heading::West => Heading::North,
+                };
+            }
+
+            2 | -2 => {
+                drive.execute(VehicleMotion::SpinCW, 100, 300);
+                delay.delay_millis(ROTATION_180_MS);
+                drive.execute(VehicleMotion::Stop, 0, 0);
+
+                self.robot_heading = match self.robot_heading {
+                    Heading::North => Heading::South,
+                    Heading::East => Heading::West,
+                    Heading::South => Heading::North,
+                    Heading::West => Heading::East,
+                };
+            }
+            0 => {}
+            _ => {
+                info!("FAULT: INVALID HEADING DELTA = {},", heading_delta);
+            }
+        }
+    }
 }
 
 struct WallState {
@@ -629,7 +662,9 @@ fn main() -> ! {
 
         drive.execute(VehicleMotion::Stop, 100, 300);
         info!("Cell traversal complete, total edges counted: {}", edges);
+        delay.delay_millis(5000);
 
-        delay.delay_millis(500); 
+        drive.execute(VehicleMotion::SpinCW, 100, 300);
+        delay.delay_millis(1500);
     }
 }
