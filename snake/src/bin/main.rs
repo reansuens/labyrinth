@@ -536,7 +536,6 @@ impl Maze {
             }
 
             -1 | 3 => {
-                // 90° counter-clockwise
                 drive.execute(VehicleMotion::SpinCCW, 100, 300);
                 delay.delay_millis(ROTATION_90_MS);
                 drive.execute(VehicleMotion::Stop, 0, 0);
