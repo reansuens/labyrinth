@@ -234,6 +234,12 @@ impl Cell {
         Self { distance, walls }
     }
 }
+
+const WALL_NORTH: u8 = 0b0001;
+const WALL_EAST: u8 = 0b0010;
+const WALL_SOUTH: u8 = 0b0100;
+const WALL_WEST: u8 = 0b1000;
+
 struct Maze {
     cells: [[Cell; ROWS]; ROWS],
     robot_x: usize,
@@ -243,6 +249,7 @@ struct Maze {
     goal_y: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Heading {
     North = 0,
     East = 1,
@@ -362,46 +369,46 @@ impl Maze {
         match self.robot_heading {
             Heading::North => {
                 if wall_left {
-                    *current_walls |= WallState::WEST;
+                    *current_walls |= WALL_WEST;
                 }
                 if wall_center {
-                    *current_walls |= WallState::NORTH;
+                    *current_walls |= WALL_NORTH;
                 }
                 if wall_right {
-                    *current_walls |= WallState::EAST;
+                    *current_walls |= WALL_EAST;
                 }
             }
             Heading::East => {
                 if wall_left {
-                    *current_walls |= WallState::NORTH;
+                    *current_walls |= WALL_NORTH;
                 }
                 if wall_center {
-                    *current_walls |= WallState::EAST;
+                    *current_walls |= WALL_EAST;
                 }
                 if wall_right {
-                    *current_walls |= WallState::SOUTH;
+                    *current_walls |= WALL_SOUTH;
                 }
             }
             Heading::South => {
                 if wall_left {
-                    *current_walls |= WallState::EAST;
+                    *current_walls |= WALL_EAST;
                 }
                 if wall_center {
-                    *current_walls |= WallState::SOUTH;
+                    *current_walls |= WALL_SOUTH;
                 }
                 if wall_right {
-                    *current_walls |= WallState::WEST;
+                    *current_walls |= WALL_WEST;
                 }
             }
             Heading::West => {
                 if wall_left {
-                    *current_walls |= WallState::SOUTH;
+                    *current_walls |= WALL_SOUTH;
                 }
                 if wall_center {
-                    *current_walls |= WallState::WEST;
+                    *current_walls |= WALL_WEST;
                 }
                 if wall_right {
-                    *current_walls |= WallState::NORTH;
+                    *current_walls |= WALL_NORTH;
                 }
             }
         }
@@ -426,9 +433,10 @@ impl Maze {
             head = (head + 1) % QUEUE_SIZE_MAX;
             let current_dist = self.cells[x][y].distance;
             let neighbors = [
-                (x.wrapping_sub(1), y, WallState::NORTH),
-                (x, y + 1, WallState::EAST),
-                (x, y.wrapping_sub(1), WallState::WEST),
+                (x.wrapping_sub(1), y, WALL_NORTH),
+                (x, y + 1, WALL_EAST),
+                (x + 1, y, WALL_SOUTH),
+                (x, y.wrapping_sub(1), WALL_WEST),
             ];
             for &(nx, ny, wall_bit) in &neighbors {
                 if nx < ROWS && ny < COLUMNS {
@@ -453,10 +461,10 @@ impl Maze {
         let mut min_distance = current_dist;
 
         let neighbors = [
-            (x.wrapping_sub(1), y, WallState::NORTH),
-            (x, y + 1, WallState::EAST),
-            (x + 1, y, WallState::SOUTH),
-            (x, y.wrapping_sub(1), WallState::WEST),
+            (x.wrapping_sub(1), y, WALL_NORTH),
+            (x, y + 1, WALL_EAST),
+            (x + 1, y, WALL_SOUTH),
+            (x, y.wrapping_sub(1), WALL_WEST),
         ];
 
         for &(nx, ny, wall_bit) in &neighbors {
@@ -504,7 +512,7 @@ impl Maze {
         self.robot_heading = required_heading;
     }
 
-    fn excute_rotation(
+    fn execute_rotation(
         &mut self,
         heading_delta: i8,
         drive: &mut DifferentialDrive,
@@ -527,6 +535,19 @@ impl Maze {
                 };
             }
 
+            -1 | 3 => {
+                // 90° counter-clockwise
+                drive.execute(VehicleMotion::SpinCCW, 100, 300);
+                delay.delay_millis(ROTATION_90_MS);
+                drive.execute(VehicleMotion::Stop, 0, 0);
+
+                self.robot_heading = match self.robot_heading {
+                    Heading::North => Heading::West,
+                    Heading::East => Heading::North,
+                    Heading::South => Heading::East,
+                    Heading::West => Heading::South,
+                };
+            }
             2 | -2 => {
                 drive.execute(VehicleMotion::SpinCW, 100, 300);
                 delay.delay_millis(ROTATION_180_MS);
@@ -539,29 +560,12 @@ impl Maze {
                     Heading::West => Heading::East,
                 };
             }
+
             0 => {}
             _ => {
                 info!("FAULT: INVALID HEADING DELTA = {},", heading_delta);
             }
         }
-    }
-}
-
-struct WallState {
-    bits: u8,
-}
-
-impl WallState {
-    const NORTH: u8 = 0b0001;
-    const EAST: u8 = 0b0010;
-    const SOUTH: u8 = 0b0100;
-    const WEST: u8 = 0b1000;
-    fn new(&self) -> Self {
-        WallState { bits: 0 }
-    }
-
-    fn is_locked() {
-        todo!()
     }
 }
 
@@ -581,8 +585,14 @@ fn main() -> ! {
     let l_dir = Output::new(peripherals.GPIO2, Level::Low, outconfig);
     let l_pwm = peripherals.GPIO3;
 
-    let mut encoder1 = Input::new(peripherals.GPIO8, inconfig);
-    let mut encoder0 = Input::new(peripherals.GPIO4, inconfig);
+    let mut encoder1 = Input::new(peripherals.GPIO21, inconfig);
+    let mut encoder0 = Input::new(peripherals.GPIO9, inconfig);
+
+    let mut encoders = Encoders {
+        zero_left: encoder1,
+        zero_right: encoder0,
+    };
+
     let mut ledc = Ledc::new(peripherals.LEDC);
     ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
 
@@ -609,17 +619,14 @@ fn main() -> ! {
         drive_mode: DriveMode::PushPull,
     });
 
-    //let mut sensor_right = Input::new(peripherals.GPIO4, inconfig);
-    //let mut sensor_center = Input::new(peripherals.GPIO5, inconfig);
-    ////let mut sensor_left = Input::new(peripherals.GPIO6, inconfig);
-    //let mut sensors: Sensor = Sensor {
-    //    right: sensor_right,
-    //    center: sensor_center,
-    //    //left: sensor_left,
-    //};
-
-    //let _gpio7 = Input::new(peripherals.GPIO7, inconfig);
-    //let _gpio8 = Input::new(peripherals.GPIO8, inconfig);
+    let mut sensor_right = Input::new(peripherals.GPIO4, inconfig);
+    let mut sensor_center = Input::new(peripherals.GPIO5, inconfig);
+    let mut sensor_left = Input::new(peripherals.GPIO20, inconfig);
+    let mut sensors: Sensor = Sensor {
+        right: sensor_right,
+        center: sensor_center,
+        left: sensor_left,
+    };
 
     let motor_right = MotorController::new(r_dir, channel0);
     let motor_left = MotorController::new(l_dir, channel1);
@@ -628,43 +635,67 @@ fn main() -> ! {
 
     let mut delay = Delay::new();
 
-    info!("DIFFERENTIAL_DRIVE_INITIALIZED: ENTERING_OPERATIONAL_LOOP");
-    let mut prev = encoder0.is_high();
-    let mut edges = 0;
-    const CELL_TIME_MS: u64 = 1500;
+    let mut maze = Maze::new(
+        [[Cell::new(u8::MAX, 0); ROWS]; ROWS],
+        START.0,
+        START.1,
+        Heading::North,
+        GOAL.0,
+        GOAL.1,
+    );
+
+    delay.delay_millis(2000); 
+
     info!("DIFFERENTIAL_DRIVE_INITIALIZED: ENTERING_OPERATIONAL_LOOP");
 
     loop {
-        info!("Moving forward one cell");
+        if let Some((_wl, _wc, _wr)) =
+            maze.resolve_forward_scan(&mut encoders, &mut sensors, &mut drive)
+        {
+            maze.flood_fill();
 
-        let mut prev = encoder0.is_high();
-        let mut edges = 0;
+            if (maze.robot_x == maze.goal_x) && (maze.robot_y == maze.goal_y) {
+                drive.execute(VehicleMotion::Stop, 0, 0);
+                info!(
+                    "MISSION_COMPLETE: GOAL_REACHED at ({}, {})",
+                    maze.goal_x, maze.goal_y
+                );
 
-        drive.execute(VehicleMotion::Forward, 100, 300);
-
-        // Simple blocking loop for 1.5 seconds
-        for _ in 0..16 {
-            // 15 iterations
-            delay.delay_millis(100); // 100 ms per iteration → 15 * 100 = 1500 ms
-            let now = encoder0.is_high();
-            if now != prev {
-                edges += 1;
-                prev = now;
-
-                // MANUAL: print 0 or 1 at each edge
-                if now {
-                    info!("1");
-                } else {
-                    info!("0");
+                for _ in 0..3 {
+                    drive.execute(VehicleMotion::SpinCW, 80, 200);
+                    delay.delay_millis(5000);
+                    drive.execute(VehicleMotion::Stop, 0, 0);
+                    delay.delay_millis(200);
                 }
+
+                break; 
             }
+
+            if let Some((target_x, target_y, heading_delta)) = maze.resolve_policy_step() {
+                if heading_delta != 0 {
+                    maze.execute_rotation(heading_delta, &mut drive, &mut delay);
+                    delay.delay_millis(200); 
+                }
+
+            } else {
+                drive.execute(VehicleMotion::Stop, 0, 0);
+                info!("FAULT: NO_VALID_POLICY - Robot trapped or distance field corrupted");
+                break;
+            }
+        } else {
+            drive.execute(VehicleMotion::Stop, 0, 0);
+            info!(
+                "FAULT: BOUNDARY_VIOLATION at ({}, {})",
+                maze.robot_x, maze.robot_y
+            );
+            break;
         }
 
-        drive.execute(VehicleMotion::Stop, 100, 300);
-        info!("Cell traversal complete, total edges counted: {}", edges);
-        delay.delay_millis(5000);
+        delay.delay_millis(100); 
+    }
 
-        drive.execute(VehicleMotion::SpinCW, 100, 300);
-        delay.delay_millis(1500);
+    info!("ENTERING_IDLE_STATE");
+    loop {
+        delay.delay_millis(1000);
     }
 }
