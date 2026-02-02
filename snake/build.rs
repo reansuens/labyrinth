@@ -55,3 +55,4 @@ fn linker_be_nice() {
         std::env::current_exe().unwrap().display()
     );
 }
+
