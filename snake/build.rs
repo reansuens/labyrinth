@@ -56,4 +56,3 @@ fn linker_be_nice() {
     );
 }
 
-
