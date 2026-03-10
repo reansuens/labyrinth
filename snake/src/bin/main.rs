@@ -183,8 +183,8 @@ impl<'u> Sensor<'u> {
 const ROWS: usize = 5;
 const COLUMNS: usize = 5;
 const QUEUE_SIZE_MAX: usize = ROWS * COLUMNS;
-const GOAL: (usize, usize) = (2, 2);
-const START: (usize, usize) = (0, 4);
+const GOAL: (usize, usize) = (1, 2);
+const START: (usize, usize) = (2, 3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Cell {
@@ -198,7 +198,7 @@ struct Encoders<'e> {
 }
 
 impl<'e> Encoders<'e> {
-    fn new(&mut self, zero_left: Input<'e>, zero_right: Input<'e>) -> Self {
+    fn new(zero_left: Input<'e>, zero_right: Input<'e>) -> Self {
         Self {
             zero_left,
             zero_right,
@@ -293,74 +293,52 @@ impl Maze {
         sensor: &mut Sensor,
         drive: &mut DifferentialDrive,
     ) -> Option<(bool, bool, bool)> {
-        encoders.forward_one(drive);
-        match self.robot_heading {
-            Heading::North => {
-                if self.robot_x > 0 {
-                    self.robot_x -= 1;
-                } else {
-                    return None;
-                }
-            }
-
-            Heading::East => {
-                if self.robot_y < COLUMNS - 1 {
-                    self.robot_y += 1;
-                } else {
-                    return None;
-                }
-            }
-            Heading::South => {
-                if self.robot_x < ROWS - 1 {
-                    self.robot_x += 1;
-                } else {
-                    return None;
-                }
-            }
-            Heading::West => {
-                if self.robot_y > 0 {
-                    self.robot_y -= 1;
-                } else {
-                    return None;
-                }
-            }
+        // Check bounds first
+        let can_move = match self.robot_heading {
+            Heading::North => self.robot_x > 0,
+            Heading::East => self.robot_y < COLUMNS - 1,
+            Heading::South => self.robot_x < ROWS - 1,
+            Heading::West => self.robot_y > 0,
+        };
+        if !can_move {
+            return None;
         }
+        // Move physically first
+        encoders.forward_one(drive);
+        // Update position (safe because we checked bounds)
+        match self.robot_heading {
+            Heading::North => self.robot_x -= 1,
+            Heading::East => self.robot_y += 1,
+            Heading::South => self.robot_x += 1,
+            Heading::West => self.robot_y -= 1,
+        }
+        // Read sensors
         let left_raw = sensor.left.is_high();
         let center_raw = sensor.center.is_high();
         let right_raw = sensor.right.is_high();
-
         let wall_left = !left_raw;
         let wall_center = !center_raw;
         let wall_right = !right_raw;
-
         self.wall_state_update(wall_left, wall_center, wall_right);
-
+        // If no walls, move forward one more cell
         if !wall_left && !wall_center && !wall_right {
-            encoders.forward_one(drive);
-            match self.robot_heading {
-                Heading::North => {
-                    if self.robot_x > 0 {
-                        self.robot_x -= 1;
-                    }
-                }
-                Heading::East => {
-                    if self.robot_y < COLUMNS - 1 {
-                        self.robot_y += 1;
-                    }
-                }
-                Heading::South => {
-                    if self.robot_x < ROWS - 1 {
-                        self.robot_x += 1;
-                    }
-                }
-                Heading::West => {
-                    if self.robot_y > 0 {
-                        self.robot_y -= 1;
-                    }
+            // Check bounds for second move
+            let can_move_again = match self.robot_heading {
+                Heading::North => self.robot_x > 0,
+                Heading::East => self.robot_y < COLUMNS - 1,
+                Heading::South => self.robot_x < ROWS - 1,
+                Heading::West => self.robot_y > 0,
+            };
+            if can_move_again {
+                encoders.forward_one(drive);
+                match self.robot_heading {
+                    Heading::North => self.robot_x -= 1,
+                    Heading::East => self.robot_y += 1,
+                    Heading::South => self.robot_x += 1,
+                    Heading::West => self.robot_y -= 1,
                 }
             }
         }
-
         Some((wall_left, wall_center, wall_right))
     }
 
@@ -536,6 +514,7 @@ impl Maze {
             }
 
             -1 | 3 => {
+                // 90° counter-clockwise
                 drive.execute(VehicleMotion::SpinCCW, 100, 300);
                 delay.delay_millis(ROTATION_90_MS);
                 drive.execute(VehicleMotion::Stop, 0, 0);
@@ -587,10 +566,7 @@ fn main() -> ! {
     let mut encoder1 = Input::new(peripherals.GPIO21, inconfig);
     let mut encoder0 = Input::new(peripherals.GPIO9, inconfig);
 
-    let mut encoders = Encoders {
-        zero_left: encoder1,
-        zero_right: encoder0,
-    };
+    let mut encoders = Encoders::new(encoder1, encoder0);
 
     let mut ledc = Ledc::new(peripherals.LEDC);
     ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
@@ -638,21 +614,24 @@ fn main() -> ! {
         [[Cell::new(u8::MAX, 0); ROWS]; ROWS],
         START.0,
         START.1,
-        Heading::North,
+        Heading::East,
         GOAL.0,
         GOAL.1,
     );
 
-    delay.delay_millis(2000); 
+    delay.delay_millis(2000); // Startup settling time
 
     info!("DIFFERENTIAL_DRIVE_INITIALIZED: ENTERING_OPERATIONAL_LOOP");
 
     loop {
+        // PHASE 1: SENSOR ACQUISITION & WALL MAPPING
         if let Some((_wl, _wc, _wr)) =
             maze.resolve_forward_scan(&mut encoders, &mut sensors, &mut drive)
         {
+            // PHASE 2: RECOMPUTE DISTANCE FIELD
             maze.flood_fill();
 
+            // PHASE 3: GOAL PROXIMITY CHECK
             if (maze.robot_x == maze.goal_x) && (maze.robot_y == maze.goal_y) {
                 drive.execute(VehicleMotion::Stop, 0, 0);
                 info!(
@@ -660,6 +639,7 @@ fn main() -> ! {
                     maze.goal_x, maze.goal_y
                 );
 
+                // Celebration sequence
                 for _ in 0..3 {
                     drive.execute(VehicleMotion::SpinCW, 80, 200);
                     delay.delay_millis(5000);
@@ -667,21 +647,27 @@ fn main() -> ! {
                     delay.delay_millis(200);
                 }
 
-                break; 
+                break; // Exit to terminal state
             }
 
+            // PHASE 4: POLICY GRADIENT EVALUATION
             if let Some((target_x, target_y, heading_delta)) = maze.resolve_policy_step() {
+                // PHASE 5: HEADING ALIGNMENT
                 if heading_delta != 0 {
                     maze.execute_rotation(heading_delta, &mut drive, &mut delay);
-                    delay.delay_millis(200); 
+                    delay.delay_millis(200); // Gyro settling time
                 }
 
+                // PHASE 6: TRANSLATION (handled by next resolve_forward_scan)
+                // Note: Motion occurs at start of next loop iteration
             } else {
+                // No valid path found
                 drive.execute(VehicleMotion::Stop, 0, 0);
                 info!("FAULT: NO_VALID_POLICY - Robot trapped or distance field corrupted");
                 break;
             }
         } else {
+            // Boundary collision detected
             drive.execute(VehicleMotion::Stop, 0, 0);
             info!(
                 "FAULT: BOUNDARY_VIOLATION at ({}, {})",
@@ -690,7 +676,7 @@ fn main() -> ! {
             break;
         }
 
-        delay.delay_millis(100); 
+        delay.delay_millis(100); // Control loop period
     }
 
     info!("ENTERING_IDLE_STATE");
