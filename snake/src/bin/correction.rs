@@ -321,7 +321,6 @@ impl Maze {
 
             encoders.forward_one(drive);
 
-            // STEP 4: UPDATE POSE AFTER CONFIRMED TRANSLATION
             match self.robot_heading {
                 Heading::North => self.robot_x -= 1,
                 Heading::East => self.robot_y += 1,
@@ -333,24 +332,11 @@ impl Maze {
         Some((wall_left, wall_center, wall_right))
     }
 
-    // ----------------------------------------------------------
-    // PATCH [FAULT_03]: BIDIRECTIONAL WALL PROPAGATION
-    //
-    // ORIGINAL: Wall written to current cell only.
-    //           BFS could traverse from neighbor side through a wall
-    //           that was never set on the neighbor's bitmask.
-    //
-    // PATCHED:  After primary write, propagate reciprocal flags to
-    //           all four cardinal neighbors.
-    //
-    // Invariant: cells[x][y].walls & WALL_N != 0
-    //            => cells[x-1][y].walls & WALL_S != 0
-    // ----------------------------------------------------------
+
     fn wall_state_update(&mut self, wall_left: bool, wall_center: bool, wall_right: bool) {
         let x = self.robot_x;
         let y = self.robot_y;
 
-        // PRIMARY: heading-relative wall bits on current cell
         {
             let w = &mut self.cells[x][y].walls;
             match self.robot_heading {
@@ -417,18 +403,7 @@ impl Maze {
         }
     }
 
-    // ----------------------------------------------------------
-    // PATCH [FAULT_04]: BFS QUEUE OVERFLOW GUARD + VISITED GATE
-    //
-    // ORIGINAL: Enqueued on distance update check alone.
-    //           tail wrap could lap head, corrupting the queue.
-    //
-    // PATCHED:
-    //   1. Enqueue only if distance == u8::MAX (not yet visited).
-    //      Eliminates duplicate enqueues at source.
-    //   2. next_tail != head guard before write.
-    //      Prevents silent overwrite on full queue.
-    // ----------------------------------------------------------
+
     fn flood_fill(&mut self) {
         for row in 0..ROWS {
             for col in 0..COLUMNS {
@@ -460,10 +435,9 @@ impl Maze {
             for &(nx, ny, wall_bit) in &neighbors {
                 if nx < ROWS && ny < COLUMNS {
                     if (self.cells[x][y].walls & wall_bit) == 0 {
-                        // PATCHED: visited-guard — enqueue only if not yet reached
+                      
                         if self.cells[nx][ny].distance == u8::MAX {
                             self.cells[nx][ny].distance = current_dist + 1;
-                            // PATCHED: overflow guard
                             let next_tail = (tail + 1) % QUEUE_SIZE_MAX;
                             if next_tail != head {
                                 queue[tail] = (nx, ny);
@@ -478,9 +452,6 @@ impl Maze {
         }
     }
 
-    // ----------------------------------------------------------
-    // POLICY STEP — UNTOUCHED
-    // ----------------------------------------------------------
     fn resolve_policy_step(&mut self) -> Option<(usize, usize, i8)> {
         let (x, y) = (self.robot_x, self.robot_y);
         let current_dist = self.cells[x][y].distance;
@@ -541,7 +512,6 @@ impl Maze {
         self.robot_heading = required_heading;
     }
 
-    // ROTATION EXECUTOR — UNTOUCHED
     fn execute_rotation(
         &mut self,
         heading_delta: i8,
@@ -596,10 +566,6 @@ impl Maze {
     }
 }
 
-// ============================================================
-// ENTRY POINT
-// ============================================================
-
 esp_bootloader_esp_idf::esp_app_desc!();
 
 #[main]
@@ -624,7 +590,6 @@ fn main() -> ! {
     let mut ledc = Ledc::new(peripherals.LEDC);
     ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
 
-    // RIGHT MOTOR PWM TIMER (10-BIT RESOLUTION)
     let mut lstimer0 = ledc.timer::<LowSpeed>(timer::Number::Timer0);
     lstimer0.configure(timer::config::Config {
         duty: timer::config::Duty::Duty10Bit,
@@ -639,7 +604,6 @@ fn main() -> ! {
         drive_mode: DriveMode::PushPull,
     });
 
-    // LEFT MOTOR PWM TIMER (10-BIT RESOLUTION, SHARED TIMER)
     let mut channel1 = ledc.channel(channel::Number::Channel1, l_pwm);
     channel1.configure(channel::config::Config {
         timer: &lstimer0,
@@ -677,14 +641,11 @@ fn main() -> ! {
     info!("DIFFERENTIAL_DRIVE_INITIALIZED: ENTERING_OPERATIONAL_LOOP");
 
     loop {
-        // PHASE 1: SENSOR ACQUISITION & WALL MAPPING
         if let Some((_wl, _wc, _wr)) =
             maze.resolve_forward_scan(&encoders, &mut sensors, &mut drive)
         {
-            // PHASE 2: RECOMPUTE DISTANCE FIELD
             maze.flood_fill();
 
-            // PHASE 3: GOAL PROXIMITY CHECK
             if (maze.robot_x == maze.goal_x) && (maze.robot_y == maze.goal_y) {
                 drive.execute(VehicleMotion::Stop, 0, 0);
                 info!(
@@ -692,7 +653,6 @@ fn main() -> ! {
                     maze.goal_x, maze.goal_y
                 );
 
-                // Celebration sequence
                 for _ in 0..3 {
                     drive.execute(VehicleMotion::SpinCW, 80, 200);
                     delay.delay_millis(500);
@@ -703,15 +663,12 @@ fn main() -> ! {
                 break;
             }
 
-            // PHASE 4: POLICY GRADIENT EVALUATION
             if let Some((target_x, target_y, heading_delta)) = maze.resolve_policy_step() {
-                // PHASE 5: HEADING ALIGNMENT
                 if heading_delta != 0 {
                     maze.execute_rotation(heading_delta, &mut drive, &mut delay);
                     delay.delay_millis(200);
                 }
 
-                // PHASE 6: TRANSLATION — deferred to top of next iteration
                 let _ = (target_x, target_y);
             } else {
                 drive.execute(VehicleMotion::Stop, 0, 0);
